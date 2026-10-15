@@ -1,1 +1,1 @@
-{ "name": "agent-tree", "version": "0.2.0", "description": "Painel em árvore com subagents em execução, suas tarefas e as sessões com que esta conversa", "types": "./types/index.d.ts" }
+{ "name": "agent-tree", "version": "0.3.0", "description": "Painel em árvore com subagents em execução, suas tarefas e as sessões com que esta conversa", "types": "./types/index.d.ts" }
