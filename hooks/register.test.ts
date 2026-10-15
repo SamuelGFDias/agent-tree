@@ -9,7 +9,7 @@ test('o painel mostra a árvore vazia', async $ => {
     requestId: 'agent-tree',
     viewport: { columns: 100, rows: 30 },
   })
-  expect(await ui.find({ type: 'Text', text: /Esta sessão/ })).toBeDefined()
+  expect(await ui.find({ type: 'Text', text: /nada rodando agora/ })).toBeDefined()
   await ui.unmount()
 })
 

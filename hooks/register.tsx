@@ -77,7 +77,18 @@ function notePeer($: any, row: Omit<PeerRow, 'count'>) {
   })
 }
 
+// Envelope de mensagem entre sessões: <cross-session-message from="uds:..." from-name="nome" ...>
+const envelope = (text: string) => ({
+  from: /\bfrom="([^"]+)"/.exec(text)?.[1],
+  name: /\bfrom-name="([^"]+)"/.exec(text)?.[1],
+})
+// Endereço cru (uds:\\.\pipe\...) vira algo legível quando o nome da sessão não é conhecido.
+const bodyOf = (t: string) => t.replace(/<\/?cross-session-message[^>]*>/g, '').replace(/\s+/g, ' ').trim()
+const readable = (addr: string) => (/^(uds:|bridge:|\w+:\/\/)/.test(addr) ? `sessão …${addr.slice(-6)}` : addr)
+
 export const register: Register = on => {
+  // endereço da sessão -> nome, aprendido nas mensagens recebidas; vale também para os envios.
+  const names = new Map<string, string>()
   const lastTool = new Map<string, string>()
   const toolCount = new Map<string, number>()
   const seen = new Map<string, number>()
@@ -163,10 +174,10 @@ export const register: Register = on => {
   on('session.send', async ($, e, next) => {
     await notePeer($, {
       key: `out:${e.to}`,
-      label: e.to,
+      label: names.get(e.to) ?? readable(e.to),
       direction: 'out',
       agentId: e.agentId,
-      lastText: short(e.text.replace(/\s+/g, ' '), 60),
+      lastText: short(bodyOf(e.text), 80),
       at: await $.clock.now(),
     })
     return next(e)
@@ -174,13 +185,21 @@ export const register: Register = on => {
 
   on('session.receive', async ($, e, next) => {
     const o = e.origin as { kind: string; teammate?: string }
-    const who = o.teammate ?? o.kind
+    const env = envelope(e.text)
+    if (env.from && env.name) names.set(env.from, env.name)
+    const who = o.teammate ?? env.name ?? (env.from ? readable(env.from) : o.kind)
+    // Envios anteriores a este endereço ganham o nome agora que ele é conhecido.
+    if (env.from && env.name) {
+      await update($, peers, (list: PeerRow[]) =>
+        list.map(p => (p.key === `out:${env.from}` ? { ...p, label: env.name as string } : p)),
+      )
+    }
     await notePeer($, {
       key: `in:${who}:${e.agentId ?? 'main'}`,
       label: who,
       direction: 'in',
       agentId: e.agentId,
-      lastText: short(e.text.replace(/\s+/g, ' '), 60),
+      lastText: short(bodyOf(e.text), 80),
       at: await $.clock.now(),
     })
     return next(e)
@@ -203,24 +222,31 @@ export const register: Register = on => {
     const cols = Math.max(20, (e.props as any).bodyColumns ?? e.viewport?.columns ?? 80)
     const narrow = cols < 50
     const fit = (s: string, used = 0) => short(s, Math.max(4, cols - used))
+    const rule = (label: string) => <Text dimColor>{('── ' + label + ' ').padEnd(cols, '─').slice(0, cols)}</Text>
 
     const toggle = (
-      <Button
-        key="toggle"
-        hotkey="c"
-        action={TOGGLE_ACTION}
-        label={isCollapsed ? '▸ Expandir' : '▾ Recolher'}
-        onPress={() => update($, collapsed, (c: boolean) => !c)}
-      />
+      <Button key="toggle" plain hotkey="c" action={TOGGLE_ACTION} onPress={() => update($, collapsed, (c: boolean) => !c)}>
+        <Text dimColor>{isCollapsed ? '▸ expandir' : '▾ recolher'}</Text>
+      </Button>
+    )
+
+    // Resumo em fichas coloridas: dá para ler o estado da sessão num relance.
+    const summary = (
+      <Text>
+        <Text color={nRun > 0 ? 'green' : 'gray'} bold>● {nRun}</Text>
+        <Text dimColor> {narrow ? '' : 'ativos'}  </Text>
+        <Text color="gray">✓ {nDone}</Text>
+        <Text dimColor> {narrow ? '' : 'concluídos'}</Text>
+      </Text>
     )
 
     if (isCollapsed) {
       return (
-        <Box flexDirection="column">
-          <Box>
-            {toggle}
-            <Text dimColor> {fit(`${nRun} ativos · ${nDone} concluídos`, 14)}</Text>
-          </Box>
+        <Box>
+          <Text bold color="cyan">◆ </Text>
+          {summary}
+          <Text> </Text>
+          {toggle}
         </Box>
       )
     }
@@ -230,39 +256,39 @@ export const register: Register = on => {
       list.filter(a => (pid === undefined ? !a.parentId || !ids.has(a.parentId) : a.parentId === pid))
 
     const node = (a: AgentRow, prefix: string, isLast: boolean): any[] => {
-      const branch = prefix + (isLast ? '└─ ' : '├─ ')
-      const nextPrefix = prefix + (isLast ? '   ' : '│  ')
+      const branch = prefix + (isLast ? '└ ' : '├ ')
+      const nextPrefix = prefix + (isLast ? '  ' : '│ ')
       const c = kids(a.id)
-      const meta = narrow
-        ? `${a.status} ${elapsed((a.endedAt ?? t) - a.startedAt)}`
-        : `[${a.type}] ${a.status} ${elapsed((a.endedAt ?? t) - a.startedAt)}`
       const title = a.name ?? a.type
-      const room = cols - branch.length - 3
-      const shownTitle = short(title, Math.max(6, Math.min(title.length, room - 6)))
-      const shownMeta = short(meta, Math.max(0, room - shownTitle.length - 1))
+      const live = !ENDED.includes(a.status)
+      const quiet = a.status === 'running' || a.status === 'completed'
+      const room = cols - branch.length - 2
+      const shownTitle = short(title, Math.max(6, room - 12))
       const isSel = sel === a.id
       const out: any[] = [
         <Box key={a.id}>
           <Text dimColor>{branch}</Text>
-          <Text color={COLOR[a.status] ?? 'white'}>{ICON[a.status] ?? '?'} </Text>
+          <Text color={COLOR[a.status] ?? 'white'} bold>{ICON[a.status] ?? '?'} </Text>
           <Button key={'sel:' + a.id} plain onPress={() => pick(a.id)}>
-            <Text bold inverse={isSel}>{shownTitle}</Text>
-            <Text dimColor> {shownMeta}</Text>
+            <Text bold inverse={isSel} dimColor={!live && !isSel}>{shownTitle}</Text>
           </Button>
+          <Text color={live ? 'green' : 'gray'}> {elapsed((a.endedAt ?? t) - a.startedAt)}</Text>
+          {!quiet && <Text color={COLOR[a.status] ?? 'white'}> {a.status}</Text>}
         </Box>,
       ]
       if (!narrow) {
+        const sub = [a.description, a.name && a.name !== a.type ? a.type : ''].filter(Boolean).join(' · ')
         out.push(
           <Box key={a.id + 'd'}>
-            <Text dimColor>{nextPrefix}   </Text>
-            <Text>{fit(a.description || '(sem descrição)', nextPrefix.length + 3)}</Text>
+            <Text dimColor>{nextPrefix}  </Text>
+            <Text>{fit(sub || '(sem descrição)', nextPrefix.length + 2)}</Text>
           </Box>,
         )
       }
       if (a.lastTool) {
         out.push(
           <Box key={a.id + 't'}>
-            <Text dimColor>{fit(`${nextPrefix}   ↳ ${a.lastTool} · ${a.tools} chamadas`)}</Text>
+            <Text dimColor>{fit(`${nextPrefix}  ↳ ${a.lastTool} · ${a.tools}×`)}</Text>
           </Box>,
         )
       }
@@ -293,64 +319,67 @@ export const register: Register = on => {
 
     const lineColor = (k: string) => (k === 'cmd' ? 'green' : k === 'err' ? 'red' : k === 'txt' ? 'cyan' : undefined)
 
+    const tabBtn = (key: string, id: string, label: string, n: number) => (
+      <Button key={key} plain onPress={() => update($, tab, () => id)}>
+        <Text bold={cur === id} inverse={cur === id} dimColor={cur !== id}>{` ${label} ${n} `}</Text>
+      </Button>
+    )
+
+    const peerRow = (l: PeerRow) => (
+      <Box key={l.key} flexDirection="column">
+        <Text>
+          <Text color={l.direction === 'out' ? 'blue' : 'magenta'} bold>{l.direction === 'out' ? '→ ' : '← '}</Text>
+          <Text bold>{fit(l.label, 12)}</Text>
+          <Text dimColor> ×{l.count}</Text>
+        </Text>
+        {!narrow && <Text dimColor>{fit(`  “${l.lastText}”`)}</Text>}
+      </Box>
+    )
+
     return (
       <Box flexDirection="column">
         <Box>
-          <Text bold>◆ {narrow ? 'Agentes' : 'Esta sessão'} </Text>
+          <Text bold color="cyan">◆ Agentes </Text>
+          {summary}
+          <Text> </Text>
           {toggle}
         </Box>
         <Box>
-          <Button
-            key="tab-active"
-            label={`${cur === 'done' ? ' ' : '▸'}${narrow ? 'Ativos' : 'Em andamento'} (${nRun})`}
-            onPress={() => update($, tab, () => 'active')}
-          />
+          {tabBtn('tab-active', 'active', narrow ? 'Ativos' : 'Em andamento', nRun)}
           <Text> </Text>
-          <Button
-            key="tab-done"
-            label={`${cur === 'done' ? '▸' : ' '}${narrow ? 'Fim' : 'Concluídos'} (${nDone})`}
-            onPress={() => update($, tab, () => 'done')}
-          />
+          {tabBtn('tab-done', 'done', narrow ? 'Fim' : 'Concluídos', nDone)}
         </Box>
         {roots.length === 0 && (
-          <Text dimColor>
-            {fit(`└─ ${cur === 'done' ? 'nenhum agente concluído ainda' : 'nenhum agente em andamento'}`)}
-          </Text>
+          <Text dimColor>{fit(cur === 'done' ? '  nenhum agente concluído ainda' : '  nada rodando agora')}</Text>
         )}
         {rows}
         {selAgent && (
           <Box key="preview" flexDirection="column">
-            <Text bold>{fit(`▼ Terminal · ${selAgent.name ?? selAgent.type}`)}</Text>
-            {lines.length === 0 && <Text dimColor>(sem saída ainda)</Text>}
+            {rule(`Terminal · ${selAgent.name ?? selAgent.type}`)}
+            {lines.length === 0 && <Text dimColor>  (sem saída ainda)</Text>}
             {lines.map((l, i) => (
               <Text key={'pv' + i} color={lineColor(l.k)} dimColor={l.k === 'out'}>
                 {fit(l.k === 'out' ? '  ' + l.s : l.s)}
               </Text>
             ))}
             <Box>
-              <Button
-                key="pv-open"
-                label="Abrir transcrição"
-                onPress={() => $.ui.view({ agentId: selAgent.id })}
-              />
-              <Text> </Text>
-              <Button key="pv-close" label="Fechar" onPress={() => update($, selected, () => '')} />
+              <Button key="pv-open" plain onPress={() => $.ui.view({ agentId: selAgent.id })}>
+                <Text color="cyan">↗ transcrição</Text>
+              </Button>
+              <Text>  </Text>
+              <Button key="pv-close" plain onPress={() => update($, selected, () => '')}>
+                <Text dimColor>✕ fechar</Text>
+              </Button>
             </Box>
           </Box>
         )}
-        {links.length > 0 && <Text bold>{narrow ? 'Sessões' : 'Conversa com outras sessões'}</Text>}
-        {outs.map(l => (
-          <Text key={l.key}>
-            <Text color="blue">→ {fit(l.label, 4)}</Text>
-            {!narrow && <Text dimColor> ×{l.count} "{short(l.lastText, Math.max(10, cols - l.label.length - 10))}"</Text>}
-          </Text>
-        ))}
-        {ins.map(l => (
-          <Text key={l.key}>
-            <Text color="magenta">← {fit(l.label, 4)}</Text>
-            {!narrow && <Text dimColor> ×{l.count} "{short(l.lastText, Math.max(10, cols - l.label.length - 10))}"</Text>}
-          </Text>
-        ))}
+        {links.length > 0 && (
+          <Box flexDirection="column">
+            {rule(narrow ? 'Sessões' : 'Outras sessões')}
+            {outs.map(peerRow)}
+            {ins.map(peerRow)}
+          </Box>
+        )}
         {e.props.isFocused && <Text dimColor>{fit('↑↓ rolar · c recolher · Tab navegar')}</Text>}
       </Box>
     )
