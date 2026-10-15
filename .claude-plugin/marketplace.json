@@ -1,0 +1,6 @@
+{
+  "name": "agent-tree",
+  "owner": { "name": "agent-tree" },
+  "description": "Painel em árvore de subagents e sessões para o Claude Code",
+  "plugins": [{ "name": "agent-tree", "source": "./", "description": "Painel em árvore com subagents em execução e concluídos, suas tarefas e as sessões com que a sessão atual conversa" }]
+}
