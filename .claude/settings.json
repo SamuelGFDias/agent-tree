@@ -1,0 +1,16 @@
+{
+  "hooks": {
+    "PreToolUse": [
+      {
+        "matcher": "Edit|Write",
+        "hooks": [{ "type": "command", "command": "powershell -NoProfile -File .claude/hooks/block-generated.ps1" }]
+      }
+    ],
+    "PostToolUse": [
+      {
+        "matcher": "Edit|Write",
+        "hooks": [{ "type": "command", "command": "powershell -NoProfile -File .claude/hooks/typecheck.ps1" }]
+      }
+    ]
+  }
+}
