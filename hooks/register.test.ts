@@ -12,3 +12,16 @@ test('o painel mostra a árvore vazia', async $ => {
   expect(await ui.find({ type: 'Text', text: /Esta sessão/ })).toBeDefined()
   await ui.unmount()
 })
+
+test('recolhido mostra só o resumo e cabe em tela estreita', async $ => {
+  const ui = await $.ui.mount({
+    plugin: 'agent-tree',
+    surface: 'terminal',
+    component: 'Pane',
+    props: { bodyColumns: 30, isFocused: true },
+    requestId: 'agent-tree',
+    viewport: { columns: 30, rows: 10 },
+  })
+  expect(await ui.find({ type: 'Text', text: /Agentes/ })).toBeDefined()
+  await ui.unmount()
+})

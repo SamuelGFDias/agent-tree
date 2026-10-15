@@ -20,8 +20,10 @@ export type PeerRow = {
   at: number
 }
 
+export type PreviewLine = { k: 'cmd' | 'out' | 'err' | 'txt'; s: string }
+
 declare module 'claude-code' {
   interface PluginState {
-    'agent-tree': { agents: AgentRow[]; peers: PeerRow[]; now: number; tab: string }
+    'agent-tree': { agents: AgentRow[]; peers: PeerRow[]; now: number; tab: string; collapsed: boolean; selected: string; preview: PreviewLine[] }
   }
 }
